@@ -1,6 +1,7 @@
 # urlshortener_app/main.py
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 import validators
 import secrets
@@ -28,13 +29,19 @@ def read_root():
 def raise_bad_request(msg):
     raise HTTPException(status_code=400, detail=msg)
 
+def raise_not_found(request):
+
+    msg = f"URL '{request.url}' doesn't exist"
+
+    raise HTTPException(status_code=404, detail=msg)
+
 
 @app.post("/url", response_model=schemas.URLInfo)
 def create_url(url: schemas.URLBase, db: Session = Depends(get_db)):
 
     #Check url provided
     if not validators.url(url.target_url):
-        raise_bad_request(message="Your provided URL is not valid")
+        raise_bad_request(msg="Your provided URL is not valid")
 
     #Create random key and secret_key
     chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -51,3 +58,46 @@ def create_url(url: schemas.URLBase, db: Session = Depends(get_db)):
     db_url.url = key
     db_url.admin_url = secret_key
     return db_url
+
+
+@app.get("/{url_key}")
+def forward_url(
+        url_key: str,
+        request: Request,
+        db: Session = Depends(get_db)
+    ):
+    #select the first row that has the given url_key
+    db_url = (
+        db.query(models.URL)
+        .filter(models.URL.key == url_key, models.URL.is_active)
+        .first()
+    )
+    #redirect user to the target url
+    if db_url:
+        return RedirectResponse(db_url.target_url)
+    else:
+        raise_not_found(request)
+
+
+@app.get("/admin/{secret_key}")
+def get_stats_admin(
+    secret_key : str,
+    request : Request,
+    db: Session = Depends(get_db)
+):
+    #select the first row that has the given secret_key
+    db_url = (
+        db.query(models.URL)
+        .filter(models.URL.secret_key == secret_key, models.URL.is_active)
+        .first()
+    )
+    #redirect admin to stats
+    from pydantic import parse_obj_as
+    from typing import Dict, Any
+    if db_url: 
+        return {"is_active": db_url.is_active, "clicks": db_url.clicks,"url": db_url.target_url }
+        #Same result with 
+        #return parse_obj_as(Dict[str, Any], {"is_active": db_url.is_active, "clicks": db_url.clicks,"url": db_url.target_url })
+    else:
+        raise_not_found(request)
+        
